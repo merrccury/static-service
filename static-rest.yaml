@@ -1,0 +1,96 @@
+openapi: 3.0.3
+info:
+  title: Static server
+  description: Static server
+  version: 1.0.0
+servers:
+  - url: 'https://static.alekseichik.dev'
+paths:
+  '/images/{bucket}':
+    put:
+      summary: Upload image
+      parameters:
+        - in: path
+          name: bucket
+          required: true
+          description: Bucket for storing specify objects
+          schema:
+            type: string
+            enum:
+              - icons
+              - profiles
+              - contents
+      responses:
+        200:
+          description: Image was added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/successfulAddingImage'
+        415:
+          description: Service doesn't support format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/serviceError'
+
+  '/images/{bucket}/{scale}/{key}':
+    get:
+      summary: get image
+      parameters:
+        - in: path
+          name: bucket
+          required: true
+          description: Bucket where storing objects
+          schema:
+            type: string
+            enum:
+              - icons
+              - profiles
+              - contents
+        - in: path
+          name: scale
+          required: true
+          description: Scale of Image
+          schema:
+            type: string
+            enum:
+              - 1x
+              - 2x
+              - 3x
+        - in: path
+          name: key
+          schema:
+            type: string
+          required: true
+          description: Key of Target Object
+      responses:
+        200:
+          description: target image
+      x-amazon-apigateway-integration:
+        type: AWS_PROXY
+        passthroughBehavior: "when_no_match"
+        httpMethod: "GET"
+        uri: 'arn:aws:lambda:eu-north-1:833206194603:function:static-service-stack-addObject-qK5R6I8NRFl0'
+        responses:
+          default:
+            statusCode: "200"
+            requestParameters:
+              integration.request.path.bucket: "method.request.path.bucket"
+              integration.request.path.scale: "method.request.path.scale"
+              integration.request.path.key: "method.request.path.key"
+components:
+  schemas:
+    successfulAddingImage:
+      type: object
+      properties:
+        key:
+          type: string
+          description: Key of added object
+
+    serviceError:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Error message

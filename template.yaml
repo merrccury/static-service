@@ -1,0 +1,165 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  template
+Transform:
+  - AWS::Serverless-2016-10-31
+Resources:
+  StaticAPI:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Name: Static API /#2
+      BinaryMediaTypes:
+        - '*/*'
+      Parameters:
+        endpointConfigurationTypes: REGIONAL
+
+  ImagesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt
+        - StaticAPI
+        - RootResourceId
+      PathPart: "images"
+      RestApiId: !Ref StaticAPI
+
+  BucketsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ImagesResource
+      PathPart: "{bucket}"
+      RestApiId: !Ref StaticAPI
+
+  KeysResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref BucketsResource
+      PathPart: "{key}"
+      RestApiId: !Ref StaticAPI
+
+  AddObjectApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: "NONE"
+      HttpMethod: "POST"
+      Integration:
+#        ContentHandlingStrategy: "CONVERT_TO_TEXT"
+        IntegrationHttpMethod: "POST"
+        Type: "AWS_PROXY"
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations"
+          - lambdaArn: !GetAtt "AddObject.Arn"
+
+      ResourceId: !Ref BucketsResource
+      RestApiId: !Ref StaticAPI
+
+  GetObjectApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: "NONE"
+      HttpMethod: "GET"
+      RequestParameters:
+        method.request.path.bucket: true
+        method.request.path.key: true
+        method.request.querystring.size: true
+      Integration:
+        IntegrationHttpMethod: "GET"
+        Type: "AWS"
+        Credentials: !GetAtt ApiGatewayS3ReadOnlyRole.Arn
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:s3:path/butler-static/{folder}/{size}/{key}
+        IntegrationResponses:
+#          - ContentHandling: CONVERT_TO_BINARY
+          - ResponseParameters:
+              method.response.header.Content-Type: integration.response.header.Content-Type
+            StatusCode: 200
+        RequestParameters:
+          integration.request.path.folder: method.request.path.bucket
+          integration.request.path.key: method.request.path.key
+          integration.request.path.size: method.request.querystring.size
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Content-Type: integration.response.header.Content-Type
+          ResponseModels:
+            image/jpeg: Empty
+            image/webp: Empty
+      ResourceId: !Ref KeysResource
+      RestApiId: !Ref StaticAPI
+
+
+  TestApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: "AddObjectApiMethod"
+    Properties:
+      RestApiId: !Ref StaticAPI
+      StageName: test
+
+  LambdaApiGatewayInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt AddObject.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${StaticAPI}/*/POST/*/*"
+
+  LambdaS3Access:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt AddObject.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: "arn:aws:s3:::butler-static/*/*"
+
+  ApiGatewayS3ReadOnlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+
+  StaticLambdaRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action: ["sts:AssumeRole"]
+            Effect: "Allow"
+            Principal:
+              Service: ["lambda.amazonaws.com"]
+      Policies:
+        - PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action: ["cloudwatch:*", "logs:*", "s3:*"]
+                Effect: "Allow"
+                Resource: "*"
+          PolicyName: "lambdaLogPolicy"
+
+  AddObject:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: static-service/
+      Handler: dist/src/handlers/add-object.handler
+      Runtime: nodejs16.x
+      Architectures:
+        - x86_64
+      MemorySize: 128
+      Timeout: 100
+      Role: !GetAtt "StaticLambdaRole.Arn"
+      Description: A simple example includes a HTTP get method to get one item by id from a DynamoDB table.
+
+Outputs:
+  WebEndpoint:
+    Description: "API Gateway endpoint URL for Prod stage"
+    Value: !Sub "https://${StaticAPI}.execute-api.${AWS::Region}.amazonaws.com/test/"
